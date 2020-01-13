@@ -2,16 +2,32 @@ function enqueue_request()
   local random = require "resty.random"
   local cjson = require "cjson"
   local redis = require "resty.redis"
-  local r     = redis:new()
-  local ok, err = r:connect(os.getenv("REDIS_URL"), os.getenv("REDIS_PORT"))
+  local r_sidekiq = redis:new()
+  local r_queue = redis:new()
+
+  local ok, err = r_sidekiq:connect(os.getenv("REDIS_URL"), os.getenv("REDIS_PORT"))
   if not ok then
+    ngx.status = ngx.HTTP_INTERNAL_SERVER_ERROR
+    ngx.say(cjson.encode({status = "error", msg =  "failed to connect: " .. err}))
+    return
+  end
+
+  local ok, err = r_queue:connect(os.getenv("REDIS_URL"), os.getenv("REDIS_PORT"))
+  if not ok then
+    ngx.status = ngx.HTTP_INTERNAL_SERVER_ERROR
     ngx.say(cjson.encode({status = "error", msg =  "failed to connect: " .. err}))
     return
   end
 
   local request_id = random.token(12)
 
-  -- prepare request payload
+  ok, err = r_queue:subscribe(request_id)
+  if not ok then
+    ngx.status = ngx.HTTP_INTERNAL_SERVER_ERROR
+    ngx.say("failed to subscribe: ", err)
+    return
+  end
+
   ngx.req.read_body()
   local payload = {
     class = "Ping",
@@ -27,11 +43,25 @@ function enqueue_request()
     enqueued_at = ngx.now()
   }
 
-  -- push to default Sidekiq queue
-  r:lpush("queue:default", cjson.encode(payload))
+  r_sidekiq:lpush("queue:default", cjson.encode(payload))
 
-  -- ngx.req.read_body()
-  -- ngx.say(cjson.encode({headers = ngx.req.get_headers(), body = ngx.req.get_body_data(), uri = ngx.var.request_uri}))
-  ngx.say("<p>hello, world6666666</p>")
+  ok, err = r_queue:read_reply()
+  if not ok then
+    ngx.status = ngx.HTTP_INTERNAL_SERVER_ERROR
+    ngx.say("failed to read reply: ", err)
+    return
+  end
+
+  local response_payload, err = r_sidekiq:get(request_id)
+  if not response_payload then
+    ngx.status = ngx.HTTP_INTERNAL_SERVER_ERROR
+    ngx.say("failed to read payload: ", err)
+
+    return
+  end
+
+  ngx.say("1: receive: ", cjson.decode(response_payload))
+  r_queue:close()
+  r_sidekiq:close()
 end
 return enqueue_request;
