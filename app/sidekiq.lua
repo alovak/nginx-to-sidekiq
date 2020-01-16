@@ -45,6 +45,7 @@ function enqueue_request()
 
   r_sidekiq:lpush("queue:default", cjson.encode(payload))
 
+  -- wait for sidekiq task to complete
   ok, err = r_queue:read_reply()
   if not ok then
     ngx.status = ngx.HTTP_INTERNAL_SERVER_ERROR
@@ -52,15 +53,22 @@ function enqueue_request()
     return
   end
 
+  -- load response payload
   local response_payload, err = r_sidekiq:get(request_id)
   if not response_payload then
     ngx.status = ngx.HTTP_INTERNAL_SERVER_ERROR
     ngx.say("failed to read payload: ", err)
-
     return
   end
 
-  ngx.say("1: receive: ", cjson.decode(response_payload))
+  -- respond to client
+  local resp = cjson.decode(response_payload)
+  ngx.status = resp["status"]
+  for key, val in pairs(resp.headers) do
+    ngx.header[key] = val
+  end
+  ngx.say(ngx.decode_base64(resp["body"]))
+
   r_queue:close()
   r_sidekiq:close()
 end
