@@ -30,7 +30,7 @@ function enqueue_request()
 
   ngx.req.read_body()
   local payload = {
-    class = "Ping",
+    class = "ProxyWorker::Worker",
     args = { 
       headers = ngx.req.get_headers(),
       body = ngx.encode_base64(ngx.req.get_body_data()),
